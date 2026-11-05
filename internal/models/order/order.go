@@ -11,6 +11,7 @@ import (
 )
 
 var (
+	ErrNotFound        = errors.New("order not found")
 	ErrEmptyCustomer   = errors.New("customer_id cannot be empty")
 	ErrNoItems         = errors.New("order must contain at least one item")
 	ErrInvalidQuantity = errors.New("item quantity must be greater than zero")
@@ -32,6 +33,17 @@ type Order struct {
 	CreatedAt  time.Time
 }
 
+// Clone возвращает копию заказа с независимым срезом позиций.
+func (o Order) Clone() Order {
+	if o.Items == nil {
+		return o
+	}
+	items := make([]Item, len(o.Items))
+	copy(items, o.Items)
+	o.Items = items
+	return o
+}
+
 func NewOrder(id, customerID string, items []Item) (*Order, error) {
 	if customerID == "" {
 		return nil, ErrEmptyCustomer
@@ -40,8 +52,9 @@ func NewOrder(id, customerID string, items []Item) (*Order, error) {
 		return nil, ErrNoItems
 	}
 
+	copiedItems := make([]Item, len(items))
 	var total int64
-	for _, item := range items {
+	for i, item := range items {
 		if item.Qty <= 0 {
 			return nil, ErrInvalidQuantity
 		}
@@ -50,13 +63,14 @@ func NewOrder(id, customerID string, items []Item) (*Order, error) {
 		}
 
 		total += int64(item.Qty) * item.PriceCents
+		copiedItems[i] = item
 	}
 
 	return &Order{
 		ID:         id,
 		CustomerID: customerID,
 		Status:     "created",
-		Items:      items,
+		Items:      copiedItems,
 		TotalCents: total,
 		CreatedAt:  time.Now().UTC(),
 	}, nil

@@ -3,14 +3,13 @@ package order
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
+	"mime"
 	"net/http"
 	"time"
 
-	// Хелперы из шаблона
 	"github.com/gulmix/orders/internal/controllers/http/response"
 	domain "github.com/gulmix/orders/internal/models/order"
-	repo "github.com/gulmix/orders/internal/repositories/order"
 )
 
 // ItemDTO описывает позицию в формате JSON
@@ -38,11 +37,11 @@ type OrderResponse struct {
 
 // OrderService — интерфейс нашего сервисного слоя
 type OrderService interface {
-	Create(id, customerID string, items []domain.Item) (domain.Order, error)
+	Create(customerID string, items []domain.Item) (domain.Order, error)
 	GetByID(id string) (domain.Order, error)
 }
 
-// Controller принимает HTTP-запросы и дергает сервис
+// Controller принимает HTTP-запросы и вызывает сервис
 type Controller struct {
 	service OrderService
 }
@@ -52,6 +51,13 @@ func NewController(s OrderService) *Controller {
 }
 
 func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
+	ct := r.Header.Get("Content-Type")
+	mediaType, _, _ := mime.ParseMediaType(ct)
+	if mediaType != "application/json" {
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "Content-Type must be application/json")
+		return
+	}
+
 	var req CreateRequest
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1048576)
@@ -60,8 +66,7 @@ func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&req); err != nil {
-		// Используем response.Error как функцию, передавая w и r
-		response.Error(w, r, http.StatusBadRequest, "bad_request", "invalid request body")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid request body")
 		return
 	}
 
@@ -74,12 +79,9 @@ func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	id := fmt.Sprintf("ord_%d", time.Now().UnixNano())
-
-	order, err := c.service.Create(id, req.CustomerID, items)
+	order, err := c.service.Create(req.CustomerID, items)
 	if err != nil {
-		// Ошибки бизнес-правил отдаем как 422 Unprocessable Entity
-		response.Error(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		writeDomainError(w, r, err)
 		return
 	}
 
@@ -92,15 +94,26 @@ func (c *Controller) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	order, err := c.service.GetByID(id)
 	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			response.Error(w, r, http.StatusNotFound, "not_found", "order not found")
-			return
-		}
-		response.Error(w, r, http.StatusInternalServerError, "internal_error", "something went wrong")
+		writeDomainError(w, r, err)
 		return
 	}
 
 	response.JSON(w, r, http.StatusOK, toDTO(order))
+}
+
+func writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		response.Error(w, r, http.StatusNotFound, response.CodeNotFound, "order not found")
+	case errors.Is(err, domain.ErrEmptyCustomer),
+		errors.Is(err, domain.ErrNoItems),
+		errors.Is(err, domain.ErrInvalidQuantity),
+		errors.Is(err, domain.ErrInvalidPrice):
+		response.Error(w, r, http.StatusUnprocessableEntity, response.CodeValidation, err.Error())
+	default:
+		slog.ErrorContext(r.Context(), "необработанная ошибка", slog.Any("error", err))
+		response.Error(w, r, http.StatusInternalServerError, response.CodeInternal, "internal server error")
+	}
 }
 
 // toDTO — хелпер для перевода доменной модели в ответ для клиента
