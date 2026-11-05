@@ -109,6 +109,37 @@ models`. Домен внизу и не знает ни о ком; всё, что
 | `ORDERS_HTTP_ADDR`        | `:8080`      | Адрес HTTP-сервера                  |
 | `ORDERS_SHUTDOWN_TIMEOUT` | `10s`        | Таймаут graceful shutdown           |
 | `ORDERS_LOG_LEVEL`        | `info`       | `debug` / `info` / `warn` / `error` |
+| `ORDERS_TLS_CERT_FILE`    | `""`         | Путь к TLS-сертификату (.pem/.crt)  |
+| `ORDERS_TLS_KEY_FILE`     | `""`         | Путь к приватному ключу TLS (.pem/.key) |
+
+### Локальный запуск с TLS (HTTPS)
+
+Для локального тестирования HTTPS сертификаты генерируются через [mkcert](https://github.com/FiloSottile/mkcert):
+
+1. Установите `mkcert` и локальный доверенный CA:
+   ```bash
+   brew install mkcert
+   mkcert -install
+   ```
+
+2. Выпустите сертификат для `localhost`:
+   ```bash
+   mkcert -cert-file localhost.pem -key-file localhost-key.pem localhost 127.0.0.1
+   ```
+
+3. Запустите сервис с TLS:
+   ```bash
+   ORDERS_HTTP_ADDR=":8443" \
+   ORDERS_TLS_CERT_FILE="localhost.pem" \
+   ORDERS_TLS_KEY_FILE="localhost-key.pem" \
+   make run
+   ```
+
+4. Проверьте соединение:
+   ```bash
+   curl -v https://localhost:8443/healthz
+   openssl s_client -connect localhost:8443 </dev/null
+   ```
 
 ## Сдача
 

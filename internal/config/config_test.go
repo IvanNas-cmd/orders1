@@ -98,6 +98,34 @@ func TestLoad(t *testing.T) {
 			env:     map[string]string{"ORDERS_LOG_LEVEL": "trace"},
 			wantErr: true,
 		},
+		{
+			name: "TLS настроен корректно (заданы обе переменные)",
+			env: map[string]string{
+				"ORDERS_TLS_CERT_FILE": "/path/to/cert.pem",
+				"ORDERS_TLS_KEY_FILE":  "/path/to/key.pem",
+			},
+			want: Config{
+				HTTPAddr:        ":8080",
+				ShutdownTimeout: 10 * time.Second,
+				LogLevel:        slog.LevelInfo,
+				TLSCertFile:     "/path/to/cert.pem",
+				TLSKeyFile:      "/path/to/key.pem",
+			},
+		},
+		{
+			name: "задан только ORDERS_TLS_CERT_FILE — ошибка на старте",
+			env: map[string]string{
+				"ORDERS_TLS_CERT_FILE": "/path/to/cert.pem",
+			},
+			wantErr: true,
+		},
+		{
+			name: "задан только ORDERS_TLS_KEY_FILE — ошибка на старте",
+			env: map[string]string{
+				"ORDERS_TLS_KEY_FILE": "/path/to/key.pem",
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,7 +159,13 @@ func TestLoad(t *testing.T) {
 func setEnv(t *testing.T, env map[string]string) {
 	t.Helper()
 
-	for _, key := range []string{"ORDERS_HTTP_ADDR", "ORDERS_SHUTDOWN_TIMEOUT", "ORDERS_LOG_LEVEL"} {
+	for _, key := range []string{
+		"ORDERS_HTTP_ADDR",
+		"ORDERS_SHUTDOWN_TIMEOUT",
+		"ORDERS_LOG_LEVEL",
+		"ORDERS_TLS_CERT_FILE",
+		"ORDERS_TLS_KEY_FILE",
+	} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("не удалось снять %s: %v", key, err)

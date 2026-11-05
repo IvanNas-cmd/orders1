@@ -44,7 +44,14 @@ func run() error {
 	// ----------------------------------------------------
 
 	// 4. Передаем оба контроллера (health и orderCtrl) в маршрутизатор
-	srv := httpServer.NewServer(cfg.HTTPAddr, internal.InitRoutes(logger, health, orderCtrl), logger, cfg.ShutdownTimeout)
+	srv := httpServer.NewServer(
+		cfg.HTTPAddr,
+		internal.InitRoutes(logger, health, orderCtrl),
+		logger,
+		cfg.ShutdownTimeout,
+		cfg.TLSCertFile,
+		cfg.TLSKeyFile,
+	)
 
 	return srv.Run()
 }
