@@ -20,13 +20,21 @@ type Server struct {
 	server          *http.Server
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
+	certFile        string
+	keyFile         string
 }
 
 // NewServer собирает сервер с обязательными таймаутами.
 //
 // Без них медленный клиент держит соединение вечно. Подробный разбор —
 // Модуль 12.
-func NewServer(addr string, handler http.Handler, logger *slog.Logger, shutdownTimeout time.Duration) *Server {
+func NewServer(
+	addr string,
+	handler http.Handler,
+	logger *slog.Logger,
+	shutdownTimeout time.Duration,
+	certFile, keyFile string,
+) *Server {
 	return &Server{
 		server: &http.Server{
 			Addr:              addr,
@@ -38,6 +46,8 @@ func NewServer(addr string, handler http.Handler, logger *slog.Logger, shutdownT
 		},
 		logger:          logger,
 		shutdownTimeout: shutdownTimeout,
+		certFile:        certFile,
+		keyFile:         keyFile,
 	}
 }
 
@@ -49,8 +59,16 @@ func (s *Server) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		s.logger.Info("сервис запущен", slog.String("addr", s.server.Addr))
-		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if s.certFile != "" && s.keyFile != "" {
+			s.logger.Info("сервис запущен с TLS", slog.String("addr", s.server.Addr), slog.String("cert", s.certFile))
+			err = s.server.ListenAndServeTLS(s.certFile, s.keyFile)
+		} else {
+			s.logger.Info("сервис запущен", slog.String("addr", s.server.Addr))
+			err = s.server.ListenAndServe()
+		}
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
