@@ -5,12 +5,11 @@
 package order
 
 import (
+	"context"
 	"sync"
 
 	domain "github.com/gulmix/orders/internal/models/order"
 )
-
-var ErrNotFound = domain.ErrNotFound
 
 type Repository struct {
 	mu     sync.RWMutex
@@ -23,13 +22,14 @@ func NewRepository() *Repository {
 	}
 }
 
-func (r *Repository) Save(o domain.Order) {
+func (r *Repository) Save(_ context.Context, o domain.Order) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.orders[o.ID] = o.Clone()
+	return nil
 }
 
-func (r *Repository) GetByID(id string) (domain.Order, error) {
+func (r *Repository) GetByID(_ context.Context, id string) (domain.Order, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

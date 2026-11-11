@@ -1,6 +1,7 @@
 package order_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -12,6 +13,7 @@ import (
 )
 
 func TestRepository_SaveAndGetByID(t *testing.T) {
+	ctx := context.Background()
 	r := repo.NewRepository()
 
 	items := []domain.Item{
@@ -20,15 +22,17 @@ func TestRepository_SaveAndGetByID(t *testing.T) {
 	ord := domain.Order{
 		ID:         "ord_1",
 		CustomerID: "cust_1",
-		Status:     "created",
+		Status:     domain.StatusCreated,
 		Items:      items,
 		TotalCents: 3000,
 		CreatedAt:  time.Now().UTC(),
 	}
 
-	r.Save(ord)
+	if err := r.Save(ctx, ord); err != nil {
+		t.Fatalf("unexpected save error: %v", err)
+	}
 
-	got, err := r.GetByID("ord_1")
+	got, err := r.GetByID(ctx, "ord_1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,6 +41,9 @@ func TestRepository_SaveAndGetByID(t *testing.T) {
 	}
 	if got.CustomerID != ord.CustomerID {
 		t.Errorf("got CustomerID = %q, want %q", got.CustomerID, ord.CustomerID)
+	}
+	if got.Status != ord.Status {
+		t.Errorf("got Status = %q, want %q", got.Status, ord.Status)
 	}
 	if got.TotalCents != ord.TotalCents {
 		t.Errorf("got TotalCents = %d, want %d", got.TotalCents, ord.TotalCents)
@@ -47,21 +54,20 @@ func TestRepository_SaveAndGetByID(t *testing.T) {
 }
 
 func TestRepository_GetByID_NotFound(t *testing.T) {
+	ctx := context.Background()
 	r := repo.NewRepository()
 
-	_, err := r.GetByID("non_existent")
+	_, err := r.GetByID(ctx, "non_existent")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("expected domain.ErrNotFound, got: %v", err)
 	}
-	if !errors.Is(err, repo.ErrNotFound) {
-		t.Errorf("expected repo.ErrNotFound, got: %v", err)
-	}
 }
 
 func TestRepository_Immutability(t *testing.T) {
+	ctx := context.Background()
 	r := repo.NewRepository()
 
 	items := []domain.Item{
@@ -70,17 +76,19 @@ func TestRepository_Immutability(t *testing.T) {
 	ord := domain.Order{
 		ID:         "ord_1",
 		CustomerID: "cust_1",
-		Status:     "created",
+		Status:     domain.StatusCreated,
 		Items:      items,
 		TotalCents: 3000,
 	}
 
-	r.Save(ord)
+	if err := r.Save(ctx, ord); err != nil {
+		t.Fatalf("unexpected save error: %v", err)
+	}
 
 	// Модифицируем исходный слайс после сохранения
 	items[0].SKU = "hacked_sku"
 
-	got, err := r.GetByID("ord_1")
+	got, err := r.GetByID(ctx, "ord_1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +99,7 @@ func TestRepository_Immutability(t *testing.T) {
 	// Модифицируем слайс полученного заказа
 	got.Items[0].SKU = "mutated_after_get"
 
-	gotAgain, err := r.GetByID("ord_1")
+	gotAgain, err := r.GetByID(ctx, "ord_1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,6 +111,7 @@ func TestRepository_Immutability(t *testing.T) {
 func TestRepository_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
 	r := repo.NewRepository()
 	const numGoroutines = 50
 	const opsPerGoroutine = 40
@@ -119,14 +128,16 @@ func TestRepository_ConcurrentAccess(t *testing.T) {
 				ord := domain.Order{
 					ID:         id,
 					CustomerID: fmt.Sprintf("cust_%d", workerID),
-					Status:     "created",
+					Status:     domain.StatusCreated,
 					Items: []domain.Item{
 						{SKU: "item", Qty: j + 1, PriceCents: 100},
 					},
 					TotalCents: int64(j+1) * 100,
 					CreatedAt:  time.Now().UTC(),
 				}
-				r.Save(ord)
+				if err := r.Save(ctx, ord); err != nil {
+					t.Errorf("unexpected save error: %v", err)
+				}
 			}
 		}(i)
 	}
@@ -137,7 +148,7 @@ func TestRepository_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < opsPerGoroutine; j++ {
 				id := fmt.Sprintf("ord_%d_%d", workerID, j)
-				ord, err := r.GetByID(id)
+				ord, err := r.GetByID(ctx, id)
 				if err == nil {
 					if ord.ID != id {
 						t.Errorf("got ID %q, want %q", ord.ID, id)
@@ -152,4 +163,24 @@ func TestRepository_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	// После завершения горутин проверяем целостность всех сохранённых заказов
+	for i := 0; i < numGoroutines; i++ {
+		for j := 0; j < opsPerGoroutine; j++ {
+			id := fmt.Sprintf("ord_%d_%d", i, j)
+			ord, err := r.GetByID(ctx, id)
+			if err != nil {
+				t.Fatalf("expected order %s to exist: %v", id, err)
+			}
+			if ord.ID != id {
+				t.Fatalf("got ID %q, want %q", ord.ID, id)
+			}
+			if ord.Items[0].Qty == 9999 {
+				t.Fatalf("order %s was mutated by reader: Qty is 9999", id)
+			}
+			if ord.Items[0].Qty != j+1 {
+				t.Fatalf("order %s has wrong Qty: got %d, want %d", id, ord.Items[0].Qty, j+1)
+			}
+		}
+	}
 }

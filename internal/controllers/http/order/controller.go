@@ -1,8 +1,10 @@
 package order
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -12,20 +14,27 @@ import (
 	domain "github.com/gulmix/orders/internal/models/order"
 )
 
-// ItemDTO описывает позицию в формате JSON
+// CreateItemDTO описывает позицию во входящем запросе создания заказа.
+type CreateItemDTO struct {
+	SKU        string `json:"sku"`
+	Qty        *int   `json:"qty"`
+	PriceCents *int64 `json:"price_cents"`
+}
+
+// CreateRequest описывает тело POST /orders.
+type CreateRequest struct {
+	CustomerID string          `json:"customer_id"`
+	Items      []CreateItemDTO `json:"items"`
+}
+
+// ItemDTO описывает позицию в ответе клиенту.
 type ItemDTO struct {
 	SKU        string `json:"sku"`
 	Qty        int    `json:"qty"`
 	PriceCents int64  `json:"price_cents"`
 }
 
-// CreateRequest описывает тело POST /orders
-type CreateRequest struct {
-	CustomerID string    `json:"customer_id"`
-	Items      []ItemDTO `json:"items"`
-}
-
-// OrderResponse описывает то, что мы возвращаем клиенту
+// OrderResponse описывает структуру заказа, возвращаемую клиенту.
 type OrderResponse struct {
 	ID         string    `json:"id"`
 	CustomerID string    `json:"customer_id"`
@@ -35,13 +44,13 @@ type OrderResponse struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// OrderService — интерфейс нашего сервисного слоя
+// OrderService — интерфейс нашего сервисного слоя.
 type OrderService interface {
-	Create(customerID string, items []domain.Item) (domain.Order, error)
-	GetByID(id string) (domain.Order, error)
+	Create(ctx context.Context, customerID string, items []domain.Item) (domain.Order, error)
+	GetByID(ctx context.Context, id string) (domain.Order, error)
 }
 
-// Controller принимает HTTP-запросы и вызывает сервис
+// Controller принимает HTTP-запросы и вызывает сервис.
 type Controller struct {
 	service OrderService
 }
@@ -70,16 +79,30 @@ func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid request body")
+		return
+	}
+
 	items := make([]domain.Item, len(req.Items))
 	for i, item := range req.Items {
+		if item.Qty == nil {
+			writeDomainError(w, r, domain.ErrMissingQuantity)
+			return
+		}
+		if item.PriceCents == nil {
+			writeDomainError(w, r, domain.ErrMissingPrice)
+			return
+		}
 		items[i] = domain.Item{
 			SKU:        item.SKU,
-			Qty:        item.Qty,
-			PriceCents: item.PriceCents,
+			Qty:        *item.Qty,
+			PriceCents: *item.PriceCents,
 		}
 	}
 
-	order, err := c.service.Create(req.CustomerID, items)
+	order, err := c.service.Create(r.Context(), req.CustomerID, items)
 	if err != nil {
 		writeDomainError(w, r, err)
 		return
@@ -92,7 +115,7 @@ func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 func (c *Controller) GetByID(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	order, err := c.service.GetByID(id)
+	order, err := c.service.GetByID(r.Context(), id)
 	if err != nil {
 		writeDomainError(w, r, err)
 		return
@@ -105,10 +128,7 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		response.Error(w, r, http.StatusNotFound, response.CodeNotFound, "order not found")
-	case errors.Is(err, domain.ErrEmptyCustomer),
-		errors.Is(err, domain.ErrNoItems),
-		errors.Is(err, domain.ErrInvalidQuantity),
-		errors.Is(err, domain.ErrInvalidPrice):
+	case errors.Is(err, domain.ErrValidation):
 		response.Error(w, r, http.StatusUnprocessableEntity, response.CodeValidation, err.Error())
 	default:
 		slog.ErrorContext(r.Context(), "необработанная ошибка", slog.Any("error", err))
@@ -116,7 +136,7 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// toDTO — хелпер для перевода доменной модели в ответ для клиента
+// toDTO — хелпер для перевода доменной модели в ответ для клиента.
 func toDTO(o domain.Order) OrderResponse {
 	items := make([]ItemDTO, len(o.Items))
 	for i, item := range o.Items {
@@ -129,7 +149,7 @@ func toDTO(o domain.Order) OrderResponse {
 	return OrderResponse{
 		ID:         o.ID,
 		CustomerID: o.CustomerID,
-		Status:     o.Status,
+		Status:     string(o.Status),
 		Items:      items,
 		TotalCents: o.TotalCents,
 		CreatedAt:  o.CreatedAt,

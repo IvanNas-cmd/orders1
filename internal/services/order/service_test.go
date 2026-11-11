@@ -1,6 +1,7 @@
 package order_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -9,8 +10,9 @@ import (
 )
 
 type mockRepo struct {
-	saved  map[string]domain.Order
-	getErr error
+	saved   map[string]domain.Order
+	saveErr error
+	getErr  error
 }
 
 func newMockRepo() *mockRepo {
@@ -19,11 +21,15 @@ func newMockRepo() *mockRepo {
 	}
 }
 
-func (m *mockRepo) Save(o domain.Order) {
+func (m *mockRepo) Save(_ context.Context, o domain.Order) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
 	m.saved[o.ID] = o
+	return nil
 }
 
-func (m *mockRepo) GetByID(id string) (domain.Order, error) {
+func (m *mockRepo) GetByID(_ context.Context, id string) (domain.Order, error) {
 	if m.getErr != nil {
 		return domain.Order{}, m.getErr
 	}
@@ -35,6 +41,7 @@ func (m *mockRepo) GetByID(id string) (domain.Order, error) {
 }
 
 func TestService_Create(t *testing.T) {
+	ctx := context.Background()
 	repo := newMockRepo()
 	svc := service.NewService(repo)
 	svc.SetIDGenerator(func() string {
@@ -45,7 +52,7 @@ func TestService_Create(t *testing.T) {
 		{SKU: "book", Qty: 2, PriceCents: 1500},
 	}
 
-	ord, err := svc.Create("cust_1", items)
+	ord, err := svc.Create(ctx, "cust_1", items)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,11 +75,12 @@ func TestService_Create(t *testing.T) {
 }
 
 func TestService_Create_ValidationError(t *testing.T) {
+	ctx := context.Background()
 	repo := newMockRepo()
 	svc := service.NewService(repo)
 
 	// Ошибка валидации: пустой customer_id
-	_, err := svc.Create("", []domain.Item{{SKU: "book", Qty: 1, PriceCents: 100}})
+	_, err := svc.Create(ctx, "", []domain.Item{{SKU: "book", Qty: 1, PriceCents: 100}})
 	if !errors.Is(err, domain.ErrEmptyCustomer) {
 		t.Fatalf("expected ErrEmptyCustomer, got: %v", err)
 	}
@@ -82,28 +90,52 @@ func TestService_Create_ValidationError(t *testing.T) {
 	}
 }
 
+func TestService_Create_RepoSaveError(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockRepo()
+	repo.saveErr = errors.New("db disk full")
+	svc := service.NewService(repo)
+
+	items := []domain.Item{
+		{SKU: "book", Qty: 1, PriceCents: 100},
+	}
+	_, err := svc.Create(ctx, "cust_1", items)
+	if !errors.Is(err, repo.saveErr) {
+		t.Fatalf("expected repo error %v, got: %v", repo.saveErr, err)
+	}
+}
+
 func TestService_GetByID(t *testing.T) {
+	ctx := context.Background()
 	repo := newMockRepo()
 	svc := service.NewService(repo)
 
 	ord := domain.Order{
 		ID:         "ord_existing",
 		CustomerID: "cust_1",
-		Status:     "created",
+		Status:     domain.StatusCreated,
 		TotalCents: 1000,
 	}
-	repo.Save(ord)
+	if err := repo.Save(ctx, ord); err != nil {
+		t.Fatalf("unexpected save error: %v", err)
+	}
 
-	got, err := svc.GetByID("ord_existing")
+	got, err := svc.GetByID(ctx, "ord_existing")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.ID != "ord_existing" {
 		t.Errorf("got ID = %q, want 'ord_existing'", got.ID)
 	}
+}
 
-	_, err = svc.GetByID("ord_non_existing")
+func TestService_GetByID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockRepo()
+	svc := service.NewService(repo)
+
+	_, err := svc.GetByID(ctx, "ord_missing")
 	if !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("expected ErrNotFound, got: %v", err)
+		t.Fatalf("expected ErrNotFound, got: %v", err)
 	}
 }

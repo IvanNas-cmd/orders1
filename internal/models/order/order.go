@@ -7,15 +7,29 @@ package order
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"time"
 )
 
+type Status string
+
+const (
+	StatusCreated Status = "created"
+)
+
 var (
-	ErrNotFound        = errors.New("order not found")
-	ErrEmptyCustomer   = errors.New("customer_id cannot be empty")
-	ErrNoItems         = errors.New("order must contain at least one item")
-	ErrInvalidQuantity = errors.New("item quantity must be greater than zero")
-	ErrInvalidPrice    = errors.New("price cannot be negative")
+	ErrNotFound   = errors.New("order not found")
+	ErrValidation = errors.New("validation error")
+
+	ErrEmptyCustomer   = fmt.Errorf("%w: customer_id cannot be empty", ErrValidation)
+	ErrNoItems         = fmt.Errorf("%w: order must contain at least one item", ErrValidation)
+	ErrInvalidQuantity = fmt.Errorf("%w: item quantity must be greater than zero", ErrValidation)
+	ErrInvalidPrice    = fmt.Errorf("%w: price cannot be negative", ErrValidation)
+	ErrInvalidSKU      = fmt.Errorf("%w: sku cannot be empty", ErrValidation)
+	ErrMissingQuantity = fmt.Errorf("%w: item quantity is required", ErrValidation)
+	ErrMissingPrice    = fmt.Errorf("%w: price_cents is required", ErrValidation)
+	ErrOverflow        = fmt.Errorf("%w: order total exceeds maximum value", ErrValidation)
 )
 
 type Item struct {
@@ -27,7 +41,7 @@ type Item struct {
 type Order struct {
 	ID         string
 	CustomerID string
-	Status     string
+	Status     Status
 	Items      []Item
 	TotalCents int64
 	CreatedAt  time.Time
@@ -44,7 +58,7 @@ func (o Order) Clone() Order {
 	return o
 }
 
-func NewOrder(id, customerID string, items []Item) (*Order, error) {
+func NewOrder(id, customerID string, items []Item, createdAt time.Time) (*Order, error) {
 	if customerID == "" {
 		return nil, ErrEmptyCustomer
 	}
@@ -55,6 +69,9 @@ func NewOrder(id, customerID string, items []Item) (*Order, error) {
 	copiedItems := make([]Item, len(items))
 	var total int64
 	for i, item := range items {
+		if item.SKU == "" {
+			return nil, ErrInvalidSKU
+		}
 		if item.Qty <= 0 {
 			return nil, ErrInvalidQuantity
 		}
@@ -62,16 +79,25 @@ func NewOrder(id, customerID string, items []Item) (*Order, error) {
 			return nil, ErrInvalidPrice
 		}
 
-		total += int64(item.Qty) * item.PriceCents
+		if item.PriceCents > 0 && int64(item.Qty) > math.MaxInt64/item.PriceCents {
+			return nil, ErrOverflow
+		}
+		itemTotal := int64(item.Qty) * item.PriceCents
+
+		if math.MaxInt64-total < itemTotal {
+			return nil, ErrOverflow
+		}
+		total += itemTotal
+
 		copiedItems[i] = item
 	}
 
 	return &Order{
 		ID:         id,
 		CustomerID: customerID,
-		Status:     "created",
+		Status:     StatusCreated,
 		Items:      copiedItems,
 		TotalCents: total,
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  createdAt,
 	}, nil
 }

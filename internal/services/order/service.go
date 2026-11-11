@@ -6,27 +6,22 @@
 package order
 
 import (
+	"context"
 	"crypto/rand"
-	"encoding/hex"
-	"fmt"
 	"time"
 
 	domain "github.com/gulmix/orders/internal/models/order"
 )
 
 type OrderRepository interface {
-	Save(o domain.Order)
-	GetByID(id string) (domain.Order, error)
+	Save(ctx context.Context, o domain.Order) error
+	GetByID(ctx context.Context, id string) (domain.Order, error)
 }
 
 type IDGenerator func() string
 
 func defaultIDGenerator() string {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("ord_%d", time.Now().UnixNano())
-	}
-	return fmt.Sprintf("ord_%s", hex.EncodeToString(b[:]))
+	return "ord_" + rand.Text()
 }
 
 type Service struct {
@@ -46,17 +41,19 @@ func (s *Service) SetIDGenerator(gen IDGenerator) {
 	s.idGen = gen
 }
 
-func (s *Service) Create(customerID string, items []domain.Item) (domain.Order, error) {
+func (s *Service) Create(ctx context.Context, customerID string, items []domain.Item) (domain.Order, error) {
 	id := s.idGen()
-	order, err := domain.NewOrder(id, customerID, items)
+	order, err := domain.NewOrder(id, customerID, items, time.Now().UTC())
 	if err != nil {
 		return domain.Order{}, err
 	}
 
-	s.repo.Save(*order)
+	if err := s.repo.Save(ctx, *order); err != nil {
+		return domain.Order{}, err
+	}
 	return *order, nil
 }
 
-func (s *Service) GetByID(id string) (domain.Order, error) {
-	return s.repo.GetByID(id)
+func (s *Service) GetByID(ctx context.Context, id string) (domain.Order, error) {
+	return s.repo.GetByID(ctx, id)
 }

@@ -2,6 +2,7 @@ package order_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,20 +17,20 @@ import (
 )
 
 type mockService struct {
-	createFunc  func(customerID string, items []domain.Item) (domain.Order, error)
-	getByIDFunc func(id string) (domain.Order, error)
+	createFunc  func(ctx context.Context, customerID string, items []domain.Item) (domain.Order, error)
+	getByIDFunc func(ctx context.Context, id string) (domain.Order, error)
 }
 
-func (m *mockService) Create(customerID string, items []domain.Item) (domain.Order, error) {
+func (m *mockService) Create(ctx context.Context, customerID string, items []domain.Item) (domain.Order, error) {
 	if m.createFunc != nil {
-		return m.createFunc(customerID, items)
+		return m.createFunc(ctx, customerID, items)
 	}
 	return domain.Order{}, nil
 }
 
-func (m *mockService) GetByID(id string) (domain.Order, error) {
+func (m *mockService) GetByID(ctx context.Context, id string) (domain.Order, error) {
 	if m.getByIDFunc != nil {
-		return m.getByIDFunc(id)
+		return m.getByIDFunc(ctx, id)
 	}
 	return domain.Order{}, nil
 }
@@ -44,11 +45,11 @@ type errorEnvelope struct {
 
 func TestController_Create_Success(t *testing.T) {
 	mock := &mockService{
-		createFunc: func(customerID string, items []domain.Item) (domain.Order, error) {
+		createFunc: func(_ context.Context, customerID string, items []domain.Item) (domain.Order, error) {
 			return domain.Order{
 				ID:         "ord_123",
 				CustomerID: customerID,
-				Status:     "created",
+				Status:     domain.StatusCreated,
 				Items:      items,
 				TotalCents: 3000,
 				CreatedAt:  time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
@@ -122,6 +123,11 @@ func TestController_Create_BadRequest(t *testing.T) {
 			contentType: "application/json",
 			body:        `{"customer_id": "cust_1", "unknown_field": 123, "items": []}`,
 		},
+		{
+			name:        "мусор после JSON",
+			contentType: "application/json",
+			body:        `{"customer_id": "cust_1", "items": [{"sku": "book", "qty": 1, "price_cents": 100}]} trailing_garbage`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -153,43 +159,72 @@ func TestController_Create_BadRequest(t *testing.T) {
 
 func TestController_Create_ValidationErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		err     error
-		wantErr string
+		name       string
+		body       string
+		serviceErr error
+		wantErr    string
 	}{
 		{
-			name:    "пустой customer_id",
-			err:     domain.ErrEmptyCustomer,
-			wantErr: domain.ErrEmptyCustomer.Error(),
+			name:    "отсутствует qty в позиции",
+			body:    `{"customer_id": "cust_1", "items": [{"sku": "book", "price_cents": 100}]}`,
+			wantErr: domain.ErrMissingQuantity.Error(),
 		},
 		{
-			name:    "пустые items",
-			err:     domain.ErrNoItems,
-			wantErr: domain.ErrNoItems.Error(),
+			name:    "отсутствует price_cents в позиции",
+			body:    `{"customer_id": "cust_1", "items": [{"sku": "book", "qty": 1}]}`,
+			wantErr: domain.ErrMissingPrice.Error(),
 		},
 		{
-			name:    "некорректное количество",
-			err:     domain.ErrInvalidQuantity,
-			wantErr: domain.ErrInvalidQuantity.Error(),
+			name:       "пустой customer_id",
+			body:       `{"customer_id": "", "items": [{"sku": "book", "qty": 1, "price_cents": 100}]}`,
+			serviceErr: domain.ErrEmptyCustomer,
+			wantErr:    domain.ErrEmptyCustomer.Error(),
 		},
 		{
-			name:    "отрицательная цена",
-			err:     domain.ErrInvalidPrice,
-			wantErr: domain.ErrInvalidPrice.Error(),
+			name:       "пустые items",
+			body:       `{"customer_id": "cust_1", "items": []}`,
+			serviceErr: domain.ErrNoItems,
+			wantErr:    domain.ErrNoItems.Error(),
+		},
+		{
+			name:       "пустой sku",
+			body:       `{"customer_id": "cust_1", "items": [{"sku": "", "qty": 1, "price_cents": 100}]}`,
+			serviceErr: domain.ErrInvalidSKU,
+			wantErr:    domain.ErrInvalidSKU.Error(),
+		},
+		{
+			name:       "некорректное количество",
+			body:       `{"customer_id": "cust_1", "items": [{"sku": "book", "qty": 0, "price_cents": 100}]}`,
+			serviceErr: domain.ErrInvalidQuantity,
+			wantErr:    domain.ErrInvalidQuantity.Error(),
+		},
+		{
+			name:       "отрицательная цена",
+			body:       `{"customer_id": "cust_1", "items": [{"sku": "book", "qty": 1, "price_cents": -50}]}`,
+			serviceErr: domain.ErrInvalidPrice,
+			wantErr:    domain.ErrInvalidPrice.Error(),
+		},
+		{
+			name:       "переполнение суммы заказа",
+			body:       `{"customer_id": "cust_1", "items": [{"sku": "book", "qty": 2, "price_cents": 9223372036854775807}]}`,
+			serviceErr: domain.ErrOverflow,
+			wantErr:    domain.ErrOverflow.Error(),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockService{
-				createFunc: func(customerID string, items []domain.Item) (domain.Order, error) {
-					return domain.Order{}, tt.err
+				createFunc: func(_ context.Context, _ string, _ []domain.Item) (domain.Order, error) {
+					if tt.serviceErr != nil {
+						return domain.Order{}, tt.serviceErr
+					}
+					return domain.Order{}, nil
 				},
 			}
 			ctrl := orderController.NewController(mock)
 
-			body := `{"customer_id": "cust_1", "items": [{"sku": "book", "qty": 1, "price_cents": 100}]}`
-			req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 
@@ -215,11 +250,11 @@ func TestController_Create_ValidationErrors(t *testing.T) {
 
 func TestController_GetByID_Success(t *testing.T) {
 	mock := &mockService{
-		getByIDFunc: func(id string) (domain.Order, error) {
+		getByIDFunc: func(_ context.Context, id string) (domain.Order, error) {
 			return domain.Order{
 				ID:         id,
 				CustomerID: "cust_1",
-				Status:     "created",
+				Status:     domain.StatusCreated,
 				Items: []domain.Item{
 					{SKU: "book", Qty: 1, PriceCents: 500},
 				},
@@ -253,7 +288,7 @@ func TestController_GetByID_Success(t *testing.T) {
 
 func TestController_GetByID_NotFound(t *testing.T) {
 	mock := &mockService{
-		getByIDFunc: func(id string) (domain.Order, error) {
+		getByIDFunc: func(_ context.Context, id string) (domain.Order, error) {
 			return domain.Order{}, domain.ErrNotFound
 		},
 	}
@@ -282,7 +317,7 @@ func TestController_GetByID_NotFound(t *testing.T) {
 
 func TestController_InternalError(t *testing.T) {
 	mock := &mockService{
-		getByIDFunc: func(id string) (domain.Order, error) {
+		getByIDFunc: func(_ context.Context, id string) (domain.Order, error) {
 			return domain.Order{}, errors.New("database connection failed")
 		},
 	}
