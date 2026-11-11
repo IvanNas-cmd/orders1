@@ -6,6 +6,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,12 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	// LogLevel — уровень логирования.
 	LogLevel slog.Level
+	// TLSCertFile — путь к файлу TLS-сертификата.
+	TLSCertFile string
+	// TLSKeyFile — путь к файлу приватного ключа TLS.
+	TLSKeyFile string
+	// TLSClientCAFile — путь к сертификату CA для проверки клиентов (mTLS).
+	TLSClientCAFile string
 }
 
 // Load читает конфигурацию из окружения, подставляя значения по умолчанию.
@@ -47,6 +54,18 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.LogLevel = lvl
+	}
+
+	cfg.TLSCertFile = os.Getenv("ORDERS_TLS_CERT_FILE")
+	cfg.TLSKeyFile = os.Getenv("ORDERS_TLS_KEY_FILE")
+	cfg.TLSClientCAFile = os.Getenv("ORDERS_TLS_CLIENT_CA_FILE")
+
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return Config{}, errors.New("ORDERS_TLS_CERT_FILE и ORDERS_TLS_KEY_FILE должны быть заданы вместе")
+	}
+
+	if cfg.TLSClientCAFile != "" && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
+		return Config{}, errors.New("ORDERS_TLS_CLIENT_CA_FILE требует, чтобы были заданы ORDERS_TLS_CERT_FILE и ORDERS_TLS_KEY_FILE")
 	}
 
 	return cfg, nil
