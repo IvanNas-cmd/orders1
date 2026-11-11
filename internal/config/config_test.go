@@ -126,6 +126,37 @@ func TestLoad(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "mTLS настроен корректно (заданы сертификат, ключ и client CA)",
+			env: map[string]string{
+				"ORDERS_TLS_CERT_FILE":      "/path/to/cert.pem",
+				"ORDERS_TLS_KEY_FILE":       "/path/to/key.pem",
+				"ORDERS_TLS_CLIENT_CA_FILE": "/path/to/ca.pem",
+			},
+			want: Config{
+				HTTPAddr:        ":8080",
+				ShutdownTimeout: 10 * time.Second,
+				LogLevel:        slog.LevelInfo,
+				TLSCertFile:     "/path/to/cert.pem",
+				TLSKeyFile:      "/path/to/key.pem",
+				TLSClientCAFile: "/path/to/ca.pem",
+			},
+		},
+		{
+			name: "задан ORDERS_TLS_CLIENT_CA_FILE без сертификатов сервера — ошибка на старте",
+			env: map[string]string{
+				"ORDERS_TLS_CLIENT_CA_FILE": "/path/to/ca.pem",
+			},
+			wantErr: true,
+		},
+		{
+			name: "задан ORDERS_TLS_CLIENT_CA_FILE и только ключ — ошибка на старте",
+			env: map[string]string{
+				"ORDERS_TLS_CLIENT_CA_FILE": "/path/to/ca.pem",
+				"ORDERS_TLS_KEY_FILE":       "/path/to/key.pem",
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -165,6 +196,7 @@ func setEnv(t *testing.T, env map[string]string) {
 		"ORDERS_LOG_LEVEL",
 		"ORDERS_TLS_CERT_FILE",
 		"ORDERS_TLS_KEY_FILE",
+		"ORDERS_TLS_CLIENT_CA_FILE",
 	} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {

@@ -51,6 +51,7 @@ func run() error {
 		cfg.ShutdownTimeout,
 		cfg.TLSCertFile,
 		cfg.TLSKeyFile,
+		cfg.TLSClientCAFile,
 	)
 
 	return srv.Run()
