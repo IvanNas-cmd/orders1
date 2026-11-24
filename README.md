@@ -109,6 +109,46 @@ models`. Домен внизу и не знает ни о ком; всё, что
 | `ORDERS_HTTP_ADDR`        | `:8080`      | Адрес HTTP-сервера                  |
 | `ORDERS_SHUTDOWN_TIMEOUT` | `10s`        | Таймаут graceful shutdown           |
 | `ORDERS_LOG_LEVEL`        | `info`       | `debug` / `info` / `warn` / `error` |
+| `ORDERS_TLS_CERT_FILE`      | `""`         | Путь к TLS-сертификату (.pem/.crt)  |
+| `ORDERS_TLS_KEY_FILE`       | `""`         | Путь к приватному ключу TLS (.pem/.key) |
+| `ORDERS_TLS_CLIENT_CA_FILE` | `""`         | Путь к CA для проверки клиентов (mTLS)  |
+
+### Локальный запуск с TLS и mTLS
+
+Для локального тестирования сертификаты генерируются через [mkcert](https://github.com/FiloSottile/mkcert):
+
+1. Установите `mkcert` и локальный доверенный CA:
+   ```bash
+   brew install mkcert
+   mkcert -install
+   ```
+
+2. Выпустите сертификат сервера и клиентский сертификат:
+   ```bash
+   mkcert -cert-file localhost.pem -key-file localhost-key.pem localhost 127.0.0.1
+   mkcert -client billing
+   ```
+
+3. Запустите сервис с mTLS:
+   ```bash
+   ORDERS_HTTP_ADDR=":8443" \
+   ORDERS_TLS_CERT_FILE="localhost.pem" \
+   ORDERS_TLS_KEY_FILE="localhost-key.pem" \
+   ORDERS_TLS_CLIENT_CA_FILE="$(mkcert -CAROOT)/rootCA.pem" \
+   make run
+   ```
+
+4. Проверьте соединение:
+   ```bash
+   # Запрос с сертификатом клиента (200 OK):
+   curl --cacert "$(mkcert -CAROOT)/rootCA.pem" \
+     --cert billing-client.pem --key billing-client-key.pem \
+     https://localhost:8443/healthz
+
+   # Запрос без сертификата клиента (ошибка рукопожатия):
+   curl --cacert "$(mkcert -CAROOT)/rootCA.pem" \
+     https://localhost:8443/healthz
+   ```
 
 ## Сдача
 

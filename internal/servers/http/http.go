@@ -6,7 +6,10 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,13 +23,22 @@ type Server struct {
 	server          *http.Server
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
+	certFile        string
+	keyFile         string
+	clientCAFile    string
 }
 
 // NewServer собирает сервер с обязательными таймаутами.
 //
 // Без них медленный клиент держит соединение вечно. Подробный разбор —
 // Модуль 12.
-func NewServer(addr string, handler http.Handler, logger *slog.Logger, shutdownTimeout time.Duration) *Server {
+func NewServer(
+	addr string,
+	handler http.Handler,
+	logger *slog.Logger,
+	shutdownTimeout time.Duration,
+	certFile, keyFile, clientCAFile string,
+) *Server {
 	return &Server{
 		server: &http.Server{
 			Addr:              addr,
@@ -38,6 +50,9 @@ func NewServer(addr string, handler http.Handler, logger *slog.Logger, shutdownT
 		},
 		logger:          logger,
 		shutdownTimeout: shutdownTimeout,
+		certFile:        certFile,
+		keyFile:         keyFile,
+		clientCAFile:    clientCAFile,
 	}
 }
 
@@ -49,8 +64,42 @@ func (s *Server) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		s.logger.Info("сервис запущен", slog.String("addr", s.server.Addr))
-		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if s.certFile != "" && s.keyFile != "" {
+			tlsConfig := &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
+
+			if s.clientCAFile != "" {
+				caCert, readErr := os.ReadFile(s.clientCAFile)
+				if readErr != nil {
+					errCh <- fmt.Errorf("чтение клиентского CA: %w", readErr)
+					return
+				}
+
+				caPool := x509.NewCertPool()
+				if !caPool.AppendCertsFromPEM(caCert) {
+					errCh <- fmt.Errorf("не удалось разобрать client CA из %s", s.clientCAFile)
+					return
+				}
+
+				tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+				tlsConfig.ClientCAs = caPool
+			}
+
+			s.server.TLSConfig = tlsConfig
+			s.logger.Info("сервис запущен с TLS",
+				slog.String("addr", s.server.Addr),
+				slog.String("cert", s.certFile),
+				slog.Bool("mtls", s.clientCAFile != ""),
+			)
+			err = s.server.ListenAndServeTLS(s.certFile, s.keyFile)
+		} else {
+			s.logger.Info("сервис запущен", slog.String("addr", s.server.Addr))
+			err = s.server.ListenAndServe()
+		}
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
