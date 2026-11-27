@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package orders.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/gulmix/orders/internal/api/orders/v1;ordersv1";
+
+// OrderService — gRPC-интерфейс сервиса заказов.
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+  rpc UpdateOrderStatus(UpdateOrderStatusRequest) returns (UpdateOrderStatusResponse);
+  // WatchOrder: первым сообщением — текущий статус, дальше — каждое
+  // изменение. Поток закрывается сам после финального статуса.
+  rpc WatchOrder(WatchOrderRequest) returns (stream WatchOrderResponse);
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_CREATED = 1;
+  ORDER_STATUS_PAID = 2;
+  ORDER_STATUS_SHIPPED = 3;
+  ORDER_STATUS_DELIVERED = 4;
+  ORDER_STATUS_CANCELLED = 5;
+}
+
+message Item {
+  string sku = 1;
+  int32 qty = 2;
+  int64 price_cents = 3;
+}
+
+message Order {
+  string id = 1;
+  string customer_id = 2;
+  OrderStatus status = 3;
+  repeated Item items = 4;
+  int64 total_cents = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message CreateOrderRequest {
+  string customer_id = 1;
+  repeated Item items = 2;
+}
+
+message CreateOrderResponse {
+  Order order = 1;
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message GetOrderResponse {
+  Order order = 1;
+}
+
+message UpdateOrderStatusRequest {
+  string id = 1;
+  OrderStatus status = 2;
+}
+
+message UpdateOrderStatusResponse {
+  Order order = 1;
+}
+
+message WatchOrderRequest {
+  string id = 1;
+}
+
+message WatchOrderResponse {
+  string order_id = 1;
+  OrderStatus status = 2;
+  google.protobuf.Timestamp changed_at = 3;
+}

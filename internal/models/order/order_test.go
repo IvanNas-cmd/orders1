@@ -126,3 +126,53 @@ func TestOrder_Clone(t *testing.T) {
 		t.Error("Clone() не создал независимый срез Items")
 	}
 }
+
+func TestOrder_StatusTransitions(t *testing.T) {
+	tests := []struct {
+		name      string
+		from      string
+		to        string
+		wantValid bool
+	}{
+		// Допустимые переходы
+		{"created -> paid", domain.StatusCreated, domain.StatusPaid, true},
+		{"paid -> shipped", domain.StatusPaid, domain.StatusShipped, true},
+		{"shipped -> delivered", domain.StatusShipped, domain.StatusDelivered, true},
+		{"created -> cancelled", domain.StatusCreated, domain.StatusCancelled, true},
+		{"paid -> cancelled", domain.StatusPaid, domain.StatusCancelled, true},
+
+		// Недопустимые переходы
+		{"created -> shipped", domain.StatusCreated, domain.StatusShipped, false},
+		{"created -> delivered", domain.StatusCreated, domain.StatusDelivered, false},
+		{"paid -> delivered", domain.StatusPaid, domain.StatusDelivered, false},
+		{"shipped -> cancelled", domain.StatusShipped, domain.StatusCancelled, false},
+		{"delivered -> anything", domain.StatusDelivered, domain.StatusCancelled, false},
+		{"cancelled -> anything", domain.StatusCancelled, domain.StatusPaid, false},
+		{"created -> created", domain.StatusCreated, domain.StatusCreated, false},
+		{"unknown status", "unknown", domain.StatusPaid, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid := domain.CanTransitionStatus(tt.from, tt.to)
+			if valid != tt.wantValid {
+				t.Errorf("CanTransitionStatus(%q, %q) = %v, want %v", tt.from, tt.to, valid, tt.wantValid)
+			}
+
+			ord := domain.Order{Status: tt.from}
+			err := ord.UpdateStatus(tt.to)
+			if tt.wantValid {
+				if err != nil {
+					t.Errorf("expected nil error on valid transition, got %v", err)
+				}
+				if ord.Status != tt.to {
+					t.Errorf("expected status %q, got %q", tt.to, ord.Status)
+				}
+			} else {
+				if !errors.Is(err, domain.ErrInvalidStatusTransition) {
+					t.Errorf("expected ErrInvalidStatusTransition, got %v", err)
+				}
+			}
+		})
+	}
+}

@@ -6,6 +6,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,10 +16,17 @@ import (
 	"time"
 )
 
+var (
+	ErrTLSPair            = errors.New("ORDERS_TLS_CERT_FILE и ORDERS_TLS_KEY_FILE должны быть заданы вместе")
+	ErrClientCAWithoutTLS = errors.New("ORDERS_TLS_CLIENT_CA_FILE требует, чтобы были заданы ORDERS_TLS_CERT_FILE и ORDERS_TLS_KEY_FILE")
+)
+
 // Config — все настройки сервиса в одном месте.
 type Config struct {
 	// HTTPAddr — адрес, который слушает HTTP-сервер, например ":8080".
 	HTTPAddr string
+	// GRPCAddr — адрес, который слушает gRPC-сервер, например ":9090".
+	GRPCAddr string
 	// ShutdownTimeout — сколько ждём завершения активных запросов при остановке.
 	ShutdownTimeout time.Duration
 	// LogLevel — уровень логирования.
@@ -36,6 +45,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:        env("ORDERS_HTTP_ADDR", ":8080"),
+		GRPCAddr:        env("ORDERS_GRPC_ADDR", ":9090"),
 		ShutdownTimeout: 10 * time.Second,
 		LogLevel:        slog.LevelInfo,
 	}
@@ -61,14 +71,49 @@ func Load() (Config, error) {
 	cfg.TLSClientCAFile = os.Getenv("ORDERS_TLS_CLIENT_CA_FILE")
 
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
-		return Config{}, errors.New("ORDERS_TLS_CERT_FILE и ORDERS_TLS_KEY_FILE должны быть заданы вместе")
+		return Config{}, ErrTLSPair
 	}
 
 	if cfg.TLSClientCAFile != "" && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
-		return Config{}, errors.New("ORDERS_TLS_CLIENT_CA_FILE требует, чтобы были заданы ORDERS_TLS_CERT_FILE и ORDERS_TLS_KEY_FILE")
+		return Config{}, ErrClientCAWithoutTLS
 	}
 
 	return cfg, nil
+}
+
+// BuildTLSConfig создаёт *tls.Config на основе путей к сертификатам.
+// Если TLS не настроен (TLSCertFile пустой), возвращает nil, nil.
+func BuildTLSConfig(cfg Config) (*tls.Config, error) {
+	if cfg.TLSCertFile == "" {
+		return nil, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("загрузка сертификата сервера: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	if cfg.TLSClientCAFile != "" {
+		caCert, err := os.ReadFile(cfg.TLSClientCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("чтение клиентского CA: %w", err)
+		}
+
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("не удалось разобрать client CA из %s", cfg.TLSClientCAFile)
+		}
+
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConfig.ClientCAs = caPool
+	}
+
+	return tlsConfig, nil
 }
 
 func env(key, fallback string) string {

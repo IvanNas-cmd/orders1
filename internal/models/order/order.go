@@ -11,11 +11,20 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("order not found")
-	ErrEmptyCustomer   = errors.New("customer_id cannot be empty")
-	ErrNoItems         = errors.New("order must contain at least one item")
-	ErrInvalidQuantity = errors.New("item quantity must be greater than zero")
-	ErrInvalidPrice    = errors.New("price cannot be negative")
+	ErrNotFound                = errors.New("order not found")
+	ErrEmptyCustomer           = errors.New("customer_id cannot be empty")
+	ErrNoItems                 = errors.New("order must contain at least one item")
+	ErrInvalidQuantity         = errors.New("item quantity must be greater than zero")
+	ErrInvalidPrice            = errors.New("price cannot be negative")
+	ErrInvalidStatusTransition = errors.New("invalid status transition")
+)
+
+const (
+	StatusCreated   = "created"
+	StatusPaid      = "paid"
+	StatusShipped   = "shipped"
+	StatusDelivered = "delivered"
+	StatusCancelled = "cancelled"
 )
 
 type Item struct {
@@ -69,9 +78,32 @@ func NewOrder(id, customerID string, items []Item) (*Order, error) {
 	return &Order{
 		ID:         id,
 		CustomerID: customerID,
-		Status:     "created",
+		Status:     StatusCreated,
 		Items:      copiedItems,
 		TotalCents: total,
 		CreatedAt:  time.Now().UTC(),
 	}, nil
+}
+
+// CanTransitionStatus проверяет допустимость перехода из статуса from в статус to.
+func CanTransitionStatus(from, to string) bool {
+	switch from {
+	case StatusCreated:
+		return to == StatusPaid || to == StatusCancelled
+	case StatusPaid:
+		return to == StatusShipped || to == StatusCancelled
+	case StatusShipped:
+		return to == StatusDelivered
+	default:
+		return false
+	}
+}
+
+// UpdateStatus обновляет статус заказа с проверкой допустимости перехода.
+func (o *Order) UpdateStatus(newStatus string) error {
+	if !CanTransitionStatus(o.Status, newStatus) {
+		return ErrInvalidStatusTransition
+	}
+	o.Status = newStatus
+	return nil
 }

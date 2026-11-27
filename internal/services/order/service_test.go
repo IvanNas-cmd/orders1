@@ -107,3 +107,90 @@ func TestService_GetByID(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
+
+func TestService_UpdateStatus(t *testing.T) {
+	repo := newMockRepo()
+	svc := service.NewService(repo)
+
+	ord := domain.Order{
+		ID:         "ord_1",
+		CustomerID: "cust_1",
+		Status:     domain.StatusCreated,
+	}
+	repo.Save(ord)
+
+	// Подписываемся на заказ
+	ch, unsub := svc.Subscribe("ord_1")
+	defer unsub()
+
+	if svc.SubscriberCount("ord_1") != 1 {
+		t.Errorf("expected 1 subscriber, got %d", svc.SubscriberCount("ord_1"))
+	}
+
+	// Успешный переход created -> paid
+	updated, err := svc.UpdateStatus("ord_1", domain.StatusPaid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.Status != domain.StatusPaid {
+		t.Errorf("expected status paid, got %s", updated.Status)
+	}
+
+	// Получаем событие в канале
+	select {
+	case event := <-ch:
+		if event.Status != domain.StatusPaid {
+			t.Errorf("expected event status paid, got %s", event.Status)
+		}
+	default:
+		t.Fatal("expected event in subscriber channel")
+	}
+
+	// Недопустимый переход paid -> created
+	_, err = svc.UpdateStatus("ord_1", domain.StatusCreated)
+	if !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Errorf("expected ErrInvalidStatusTransition, got %v", err)
+	}
+
+	// Отписка
+	unsub()
+	if svc.SubscriberCount("ord_1") != 0 {
+		t.Errorf("expected 0 subscribers after unsub, got %d", svc.SubscriberCount("ord_1"))
+	}
+}
+
+func TestService_SlowSubscriber(t *testing.T) {
+	repo := newMockRepo()
+	svc := service.NewService(repo)
+
+	ord := domain.Order{
+		ID:         "ord_slow",
+		CustomerID: "cust_1",
+		Status:     domain.StatusCreated,
+	}
+	repo.Save(ord)
+
+	ch, unsub := svc.Subscribe("ord_slow")
+	defer unsub()
+
+	// Выполняем цепочку быстрых обновлений без вычитывания из ch:
+	// created -> paid -> shipped -> delivered
+	_, err := svc.UpdateStatus("ord_slow", domain.StatusPaid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = svc.UpdateStatus("ord_slow", domain.StatusShipped)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = svc.UpdateStatus("ord_slow", domain.StatusDelivered)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Медленный подписчик читает канал: он гарантированно получает финальный статус
+	event := <-ch
+	if event.Status != domain.StatusDelivered {
+		t.Errorf("expected slow subscriber to receive latest status delivered, got %s", event.Status)
+	}
+}

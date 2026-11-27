@@ -107,6 +107,7 @@ models`. Домен внизу и не знает ни о ком; всё, что
 | Переменная                | По умолчанию | Назначение                          |
 | ------------------------- | ------------ | ----------------------------------- |
 | `ORDERS_HTTP_ADDR`        | `:8080`      | Адрес HTTP-сервера                  |
+| `ORDERS_GRPC_ADDR`        | `:9090`      | Адрес gRPC-сервера                  |
 | `ORDERS_SHUTDOWN_TIMEOUT` | `10s`        | Таймаут graceful shutdown           |
 | `ORDERS_LOG_LEVEL`        | `info`       | `debug` / `info` / `warn` / `error` |
 | `ORDERS_TLS_CERT_FILE`      | `""`         | Путь к TLS-сертификату (.pem/.crt)  |
