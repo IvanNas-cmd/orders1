@@ -34,6 +34,13 @@ run: ## Запустить сервис локально (подхватит .en
 build: ## Собрать бинарник в bin/
 	$(GO) build -o $(BIN_DIR)/$(BINARY) ./cmd/$(BINARY)
 
+.PHONY: proto
+proto: ## Сгенерировать Go-код из protobuf файлов
+	protoc -I api \
+		--go_out=. --go_opt=module=github.com/gulmix/orders \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/gulmix/orders \
+		api/orders/v1/orders.proto
+
 .PHONY: fmt
 fmt: ## Отформатировать код
 	$(GO) fmt $(PKG)

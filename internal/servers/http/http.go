@@ -1,17 +1,11 @@
 // Package http поднимает HTTP-сервер и корректно его останавливает.
-//
-// Вынесено из main, чтобы composition root остался плоским: main только
-// собирает зависимости, а как именно живёт и умирает сервер — знает этот пакет.
 package http
 
 import (
 	"context"
-	"errors"
+	"crypto/tls"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -22,11 +16,14 @@ type Server struct {
 	shutdownTimeout time.Duration
 }
 
-// NewServer собирает сервер с обязательными таймаутами.
-//
-// Без них медленный клиент держит соединение вечно. Подробный разбор —
-// Модуль 12.
-func NewServer(addr string, handler http.Handler, logger *slog.Logger, shutdownTimeout time.Duration) *Server {
+// NewServer собирает сервер с обязательными таймаутами и готовым *tls.Config.
+func NewServer(
+	addr string,
+	handler http.Handler,
+	logger *slog.Logger,
+	shutdownTimeout time.Duration,
+	tlsConfig *tls.Config,
+) *Server {
 	return &Server{
 		server: &http.Server{
 			Addr:              addr,
@@ -35,49 +32,29 @@ func NewServer(addr string, handler http.Handler, logger *slog.Logger, shutdownT
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      15 * time.Second,
 			IdleTimeout:       60 * time.Second,
+			TLSConfig:         tlsConfig,
 		},
 		logger:          logger,
 		shutdownTimeout: shutdownTimeout,
 	}
 }
 
-// Run запускает сервер и блокируется до сигнала остановки или ошибки.
-func (s *Server) Run() error {
-	// Слушаем сигналы остановки: SIGINT от Ctrl+C, SIGTERM от Docker и k8s.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	errCh := make(chan error, 1)
-	go func() {
-		s.logger.Info("сервис запущен", slog.String("addr", s.server.Addr))
-		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		// Обработчик снимаем сразу, ещё до самого shutdown: дальше сигналы
-		// должен получать рантайм. Иначе второй Ctrl+C уйдёт в уже
-		// отработавший обработчик, и нетерпеливому человеку останется
-		// только kill -9.
-		stop()
-
-		s.logger.Info("получен сигнал остановки, дожидаемся активных запросов",
-			slog.Duration("timeout", s.shutdownTimeout))
+// Serve запускает сервер (с TLS или без).
+func (s *Server) Serve() error {
+	if s.server.TLSConfig != nil {
+		s.logger.Info("HTTP-сервер запущен с TLS",
+			slog.String("addr", s.server.Addr),
+			slog.Bool("mtls", s.server.TLSConfig.ClientAuth == tls.RequireAndVerifyClientCert),
+		)
+		return s.server.ListenAndServeTLS("", "")
 	}
 
-	// Graceful shutdown: перестаём принимать новые соединения и даём
-	// активным запросам доработать, но не дольше таймаута.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
-	defer cancel()
+	s.logger.Info("HTTP-сервер запущен", slog.String("addr", s.server.Addr))
+	return s.server.ListenAndServe()
+}
 
-	if err := s.server.Shutdown(shutdownCtx); err != nil {
-		return err
-	}
-
-	s.logger.Info("сервис остановлен")
-	return nil
+// Shutdown корректно останавливает HTTP-сервер.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.logger.Info("остановка HTTP-сервера...")
+	return s.server.Shutdown(ctx)
 }
